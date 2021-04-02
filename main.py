@@ -1,6 +1,8 @@
 import os
 import json
+import glob
 import asyncio
+import argparse
 from datetime import timedelta
 from pytchat import LiveChatAsync
 from tqdm import tqdm
@@ -8,15 +10,15 @@ import scipy.cluster.hierarchy as hcluster
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, concatenate_videoclips
 
 
 folder = "./data"
-ytid = None
+ytid = None  # BAD to put in global
 
 
 async def download_chat(id):
-    print(f"Download chat via pytchat")
+    print(f"Download {id} chat via pytchat")
     global ytid, pbar
     ytid = id
     pbar = tqdm(desc="Total chat download")
@@ -33,7 +35,7 @@ async def download_chat(id):
             'id': id,
             'chats': list(data)},
             fout)
-    print(f"Download {id} chat {folder}/{id}.chat.json")
+    print(f"Download {id} chat in {folder}/{id}.chat.json")
 
 
 async def save_chat(chatdata):
@@ -57,8 +59,16 @@ async def download(id):
                          download_video(id))
 
 
-def sec_to_str(i):
-    return str(timedelta(seconds=int(i)))
+def sec_to_str(sec):
+    return str(timedelta(seconds=int(sec)))
+
+
+def str_to_sec(s):
+    a = str(s).split(':')
+    while len(a) < 3:
+        a = [0] + a
+    return int(a[0]) * 3600 + int(a[1]) * 60 + int(a[2])
+
 
 def get_keyword_timestamp(chat_file, keyword_func,
                           save_fig=True, show_fig=False,
@@ -83,10 +93,8 @@ def get_keyword_timestamp(chat_file, keyword_func,
     data_hic = filter(keyword_func, data)
 
     # get eps, you can calculate the elapsed_time manually
-    hic_eps = map(lambda i: i['elapsedTime'].split(":"), data_hic)
-    hic_eps = map(lambda i: i if len(i) == 3 else ["0"] + i, hic_eps)
-    hic_eps = np.array(list(hic_eps), dtype=int)
-    hic_eps = hic_eps.dot([3600, 60, 1])
+    hic_eps = np.array(list(map(lambda i: str_to_sec(i['elapsedTime']),
+                                data_hic)))
 
     # cluster
     clusters = hcluster.fclusterdata(hic_eps[:, None],
@@ -134,45 +142,98 @@ def get_keyword_timestamp(chat_file, keyword_func,
     return list(map(lambda i: i[0], data_cluster))
 
 
-def clip_by_timestamp(id, timestamps, seconds_before=5, seconds_after=10):
+def clip_by_timestamp(id, timestamps, suffix="hic",
+                      seconds_before=5, seconds_after=10):
     video = VideoFileClip(f"{folder}/{id}.mp4")
     for i, t in enumerate(timestamps):
         clip = video.subclip(t - seconds_before, t + seconds_after)
-        clip.write_videofile(f"{folder}/{id}.hic{i:02d}.mp4")
+        clip.write_videofile(f"{folder}/{id}.{suffix}{i:02d}.mp4")
+
+
+def clip_merge(id, suffix="hic"):
+    videos = sorted(glob.glob(f"{folder}/{id}.{suffix}*.mp4"))
+    videos = filter(lambda i: "merged" not in i, videos)
+    videos = list(map(VideoFileClip, videos))
+    merged_video = concatenate_videoclips(videos)
+    merge_file = f"{folder}/{id}.{suffix}.merged.mp4"
+    merged_video.write_videofile(merge_file)
+    print(f"merge {videos} into {merge_file}")
+
+
+def setupParser():
+    parser = argparse.ArgumentParser(description="Auto HIC clipper",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("id", type=str,
+                        help="Youtube video id")
+    parser.add_argument("--base", type=str, default="./data",
+                        help="Path to data folder")
+
+    # download
+    parser.add_argument("--download", action="store_true",
+                        help="Download youtube chat and video simultaneously")
+    parser.add_argument("--download_chat", action="store_true",
+                        help="Donwload chat only")
+    parser.add_argument("--download_video", action="store_true",
+                        help="Donwload video only")
+
+    # keyword
+    parser.add_argument("--keyword_threshold", type=int, default=3)
+    parser.add_argument("--keyword_func", type=str, default="hic_ubye_keyword",
+                        help="Fill the function name in config.py")
+    parser.add_argument("--suffix", type=str, default="hic")
+
+    # clip
+    parser.add_argument("--clip", action="store_true",
+                        help="Clip the video by timecode")
+    parser.add_argument("--clip_dryrun", action="store_true",
+                        help="Same as --clip but only plot the timecode")
+    parser.add_argument("--clip_timecode", type=str,
+                        help="Specific timecode you want to clip")
+    parser.add_argument("--clip_seconds_before", type=float, default=5,
+                        help="Seconds before the event for clipping")
+    parser.add_argument("--clip_seconds_after", type=float, default=10,
+                        help="Seconds after the event for clipping")
+    parser.add_argument("--merge", action="store_true",
+                        help="Merge the clips")
+
+    return parser
 
 
 if __name__ == "__main__":
+    parser = setupParser()
+    args = parser.parse_args()
+    id = args.id
+    folder = args.base
     os.makedirs(folder, exist_ok=True)
-    id = "c3hdmr5mlzc"  # test
-    # asyncio.run(download(id))
-    # asyncio.run(download_chat(id))
-    # asyncio.run(download_video(id))
 
-    def hic_ame_keyword(i):
-        return "hic" == i['message'].lower() or \
-               ":_hic1::_hic2::_hic3:" == i['message']
+    if args.download:
+        asyncio.run(download(id))
+    else:
+        if args.download_chat:
+            asyncio.run(download_chat(id))
+        if args.download_video:
+            asyncio.run(download_video(id))
 
-    def hic_ubye_keyword(i):
-        # this is enough in chinese chat
-        return "hic" in i['message'].lower()
+    if args.clip or args.clip_dryrun:
+        import config
+        keyword_func = getattr(config, args.keyword_func)
+        timestamps = get_keyword_timestamp(
+                f"{folder}/{id}.chat.json",
+                keyword_func,
+                thresh_report=args.keyword_threshold,
+                show_fig=args.clip_dryrun)
+        print("HIC timecode:", list(map(sec_to_str, timestamps)))
+        if not args.clip_dryrun:
+            clip_by_timestamp(id, timestamps,
+                              suffix=args.suffix,
+                              seconds_before=args.clip_seconds_before,
+                              seconds_after=args.clip_seconds_after)
 
-    """
-    id = "ejGH1BC1l98"  # ubye
-    asyncio.run(download(id))
+    if args.clip_timecode:
+        t = str_to_sec(args.clip_timecode)
+        clip_by_timestamp(id, [t], suffix=args.clip_timecode.replace(":", "_"),
+                          seconds_before=args.clip_seconds_before,
+                          seconds_after=args.clip_seconds_after)
 
-    timestamps = get_keyword_timestamp(
-            f"{folder}/{id}.chat.json",
-            hic_ubye_keyword)
-    clip_by_timestamp(id, timestamps)
-    """
-
-    id = "TgEX7HFqTYc"  # ame
-
-    # asyncio.run(download(id))
-    timestamps = get_keyword_timestamp(
-            f"{folder}/{id}.chat.json",
-            hic_ame_keyword, show_fig=False,
-            thresh_report=10)
-    print(list(map(sec_to_str, timestamps)))
-    # clip_by_timestamp(id, timestamps,
-    #                   seconds_before=5, seconds_after=2.5)
+    if args.merge:
+        clip_merge(id, suffix=args.suffix)
