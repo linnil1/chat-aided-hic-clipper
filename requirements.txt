@@ -1,0 +1,7 @@
+youtube-dl
+pytchat
+moviepy
+scipy
+numpy
+tqdm
+matplotlib

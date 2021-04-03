@@ -142,22 +142,24 @@ def get_keyword_timestamp(chat_file, keyword_func,
     return list(map(lambda i: i[0], data_cluster))
 
 
-def clip_by_timestamp(id, timestamps, suffix="hic",
+def clip_by_timestamp(id, timestamps, suffix="hic", index=None,
                       seconds_before=5, seconds_after=10):
     video = VideoFileClip(f"{folder}/{id}.mp4")
     for i, t in enumerate(timestamps):
+        if index is not None and i != index:
+            continue
         clip = video.subclip(t - seconds_before, t + seconds_after)
         clip.write_videofile(f"{folder}/{id}.{suffix}{i:02d}.mp4")
 
 
 def clip_merge(id, suffix="hic"):
-    videos = sorted(glob.glob(f"{folder}/{id}.{suffix}*.mp4"))
-    videos = filter(lambda i: "merged" not in i, videos)
-    videos = list(map(VideoFileClip, videos))
-    merged_video = concatenate_videoclips(videos)
+    input_videos = sorted(glob.glob(f"{folder}/{id}.{suffix}*.mp4"))
+    input_videos = list(filter(lambda i: "merged" not in i, input_videos))
+    videos = map(VideoFileClip, input_videos)
+    merged_video = concatenate_videoclips(list(videos))
     merge_file = f"{folder}/{id}.{suffix}.merged.mp4"
     merged_video.write_videofile(merge_file)
-    print(f"merge {videos} into {merge_file}")
+    print(f"merge {input_videos} into {merge_file}")
 
 
 def setupParser():
@@ -181,6 +183,10 @@ def setupParser():
     parser.add_argument("--keyword_func", type=str, default="hic_ubye_keyword",
                         help="Fill the function name in config.py")
     parser.add_argument("--suffix", type=str, default="hic")
+    parser.add_argument("--load_timecode", action="store_true",
+                        help="Load the timecode file"
+                             "(This file is generated after "
+                             "--clip or --clip_dryrun)")
 
     # clip
     parser.add_argument("--clip", action="store_true",
@@ -189,6 +195,8 @@ def setupParser():
                         help="Same as --clip but only plot the timecode")
     parser.add_argument("--clip_timecode", type=str,
                         help="Specific timecode you want to clip")
+    parser.add_argument("--reclip_index", type=int,
+                        help="Specific hic.index you want to reclip")
     parser.add_argument("--clip_seconds_before", type=float, default=5,
                         help="Seconds before the event for clipping")
     parser.add_argument("--clip_seconds_after", type=float, default=10,
@@ -214,24 +222,43 @@ if __name__ == "__main__":
         if args.download_video:
             asyncio.run(download_video(id))
 
-    if args.clip or args.clip_dryrun:
-        import config
-        keyword_func = getattr(config, args.keyword_func)
-        timestamps = get_keyword_timestamp(
-                f"{folder}/{id}.chat.json",
-                keyword_func,
-                thresh_report=args.keyword_threshold,
-                show_fig=args.clip_dryrun)
-        print("HIC timecode:", list(map(sec_to_str, timestamps)))
+    if args.clip or args.clip_dryrun or args.reclip_index:
+        file_timecode = f"{folder}/{id}.hic.time.csv"
+
+        if args.load_timecode and os.path.exists(file_timecode):
+            timestamps = list(map(lambda i: str_to_sec(i.split(",")[0]),
+                                  open(file_timecode)))
+        else:
+            import config
+            keyword_func = getattr(config, args.keyword_func)
+            timestamps = get_keyword_timestamp(
+                    f"{folder}/{id}.chat.json",
+                    keyword_func,
+                    thresh_report=args.keyword_threshold,
+                    show_fig=args.clip_dryrun)
+
+            # save
+            with open(file_timecode, "w") as flog:
+                for i, t in enumerate(timestamps):
+                    flog.write(f"{str(sec_to_str(t))},hic{i:02d}\n")
+
+        # log
+        print("HIC timecode:")
+        for i, t in enumerate(timestamps):
+            print(f"  hic{i:02d} {str(sec_to_str(t))}")
+
+        # clip
         if not args.clip_dryrun:
             clip_by_timestamp(id, timestamps,
                               suffix=args.suffix,
+                              index=args.reclip_index,
                               seconds_before=args.clip_seconds_before,
                               seconds_after=args.clip_seconds_after)
 
-    if args.clip_timecode:
+    elif args.clip_timecode:
         t = str_to_sec(args.clip_timecode)
-        clip_by_timestamp(id, [t], suffix=args.clip_timecode.replace(":", "_"),
+        clip_by_timestamp(id, [t],
+                          suffix=args.clip_timecode.replace(":", "_"),
                           seconds_before=args.clip_seconds_before,
                           seconds_after=args.clip_seconds_after)
 
