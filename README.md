@@ -52,7 +52,7 @@ If the dryrun is specific,
 it will show the timecode and HIC histogram instead of clipping.
 The example histogram of ejGH1BC1l98(Saved in `./data/ejGH1BC1l98.hic.png`):
 
-![hic-historgram](https://raw.githubusercontent.com/linnil1/chat-aided-hic-clipper/data/ejGH1BC1l98.hic.png)
+![hic-historgram](https://raw.githubusercontent.com/linnil1/chat-aided-hic-clipper/main/data/ejGH1BC1l98.hic.png)
 
 `python3 auto_hic_clip.py TgEX7HFqTYc --clip-dryrun --keyword_func=hic_ame_keyword --keyword_threshold=10`
 
@@ -110,9 +110,12 @@ python3 auto_hic_clip.py TgEX7HFqTYc --download --clip --keyword_func=hic_ame_ke
 3. The HIC event are grouped with elaped time by hierarchical clustering.
 I assume the HIC event cannot occur twice within 60 seconds, thus 60 is the distance to separate the clusters.
 
-3. The number of reports in the event are thresholded because some false alarms.
+3. The number of reports in the HIC event are thresholded because some false alarms.
 
-4. Clip the video by the HIC event with time-shift. -10s for Ubye and -3s for Ame.
+4. The timecode is the elaped-time of second reporter(sorted by time of course) in the HIC event.
+I think someone can predict the hiccup.
+
+5. Clip the video by the HIC event with manually time-shift. -10s for Ubye and -3s for Ame.
 
 Note: The values calculated by elapsed time and datetime are given almost same result in clustering.
 
